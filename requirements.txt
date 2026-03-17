@@ -1,5 +1,4 @@
-numpy
 streamlit
 pandas
-sqlite3
 supabase
+numpy
