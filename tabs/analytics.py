@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from scoring import get_score_history
 import calendar
 
-def render(conn, selected_filter_tag):
+def render(supabase, selected_filter_tag):
     st.header("📈 Score Evolution")
 
     # --- 1. SET UP DATE FILTERS ---
@@ -31,8 +31,7 @@ def render(conn, selected_filter_tag):
         start_date = today - timedelta(days=365)
     elif view_option == "Specific Year":
         year = col_year.number_input("Year", min_value=2020, max_value=2030, value=today.year)
-        start_date = date(year, 1, 1)
-        end_date = date(year, 12, 31)
+        start_date, end_date = date(year, 1, 1), date(year, 12, 31)
     elif view_option == "Specific Month":
         year = col_year.number_input("Year", min_value=2020, max_value=2030, value=today.year, key="month_year")
         month_name = col_month.selectbox("Month", list(calendar.month_name)[1:])
@@ -41,46 +40,65 @@ def render(conn, selected_filter_tag):
         last_day = calendar.monthrange(year, month_idx)[1]
         end_date = date(year, month_idx, last_day)
 
-    # --- 2. GET PEOPLE DATA ---
+    # --- 2. GET PEOPLE DATA FROM SUPABASE ---
     if selected_filter_tag != "All":
-        query = """SELECT p.id, p.first_name || ' ' || p.last_name as name FROM people p
-                   JOIN person_tags pt ON p.id = pt.person_id
-                   JOIN tags t ON pt.tag_id = t.id WHERE t.tag_name = ?"""
-        people_to_track = pd.read_sql(query, conn, params=(selected_filter_tag,))
+        # Get people who have the selected tag
+        response = supabase.table("person_tags") \
+            .select("people(id, first_name, last_name, score), tags!inner(tag_name)") \
+            .eq("tags.tag_name", selected_filter_tag) \
+            .execute()
+        
+        data = []
+        for row in response.data:
+            p = row['people']
+            data.append({
+                "id": p['id'], 
+                "name": f"{p['first_name']} {p['last_name']}",
+                "score": p['score']
+            })
+        people_to_track = pd.DataFrame(data)
     else:
-        people_to_track = pd.read_sql("SELECT id, first_name || ' ' || last_name as name FROM people", conn)
+        # Get all people
+        response = supabase.table("people").select("id, first_name, last_name, score").execute()
+        data = [{"id": r['id'], "name": f"{r['first_name']} {r['last_name']}", "score": r['score']} for r in response.data]
+        people_to_track = pd.DataFrame(data)
 
     if people_to_track.empty:
         st.info("No connections found.")
         return
 
+    # Filter the list by the top scores (the user-selected limit)
     limit = st.selectbox("Show top current relationships:", [5, 10, 20, "All"])
-    num_limit = len(people_to_track) if limit == "All" else limit
     
-    ids = people_to_track['id'].tolist()
-    placeholders = ','.join('?' for _ in ids)
-    top_people = pd.read_sql(f"SELECT id, first_name || ' ' || last_name as name FROM people WHERE id IN ({placeholders}) ORDER BY score DESC LIMIT ?", 
-                             conn, params=(*ids, num_limit))
+    if limit != "All":
+        top_people = people_to_track.sort_values("score", ascending=False).head(int(limit))
+    else:
+        top_people = people_to_track
 
     # --- 3. GENERATE & FILTER HISTORY ---
     all_histories = []
-    for _, person in top_people.iterrows():
-        # get_score_history calculates from the VERY BEGINNING to maintain 'Burn' accuracy
-        hist = get_score_history(conn, person['id'], person['name'])
+    
+    # We use a progress bar because reconstructing history via Cloud API takes a moment
+    progress_bar = st.progress(0)
+    for i, (_, person) in enumerate(top_people.iterrows()):
+        # Pass 'supabase' client to the history generator
+        hist = get_score_history(supabase, person['id'], person['name'])
         
         if not hist.empty:
-            # Now we slice the data based on our UI filters
             if start_date:
                 hist = hist[hist['Date'] >= start_date]
             if end_date:
                 hist = hist[hist['Date'] <= end_date]
-            
             all_histories.append(hist)
+        
+        progress_bar.progress((i + 1) / len(top_people))
+    
+    progress_bar.empty()
 
     # --- 4. PLOTTING ---
     if all_histories:
         full_df = pd.concat(all_histories)
-        # Ensure we have a continuous index for the chart
+        # Pivot for the chart (Date as X, Person as Legend, Score as Y)
         chart_data = full_df.pivot(index="Date", columns="Person", values="Score").ffill().fillna(0)
         
         st.line_chart(chart_data)

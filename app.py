@@ -1,22 +1,10 @@
 import streamlit as st
-import sqlite3
-import pandas as pd
-from datetime import date
-from scoring import update_person_score, recalculate_all
+from database import supabase
+from scoring import recalculate_all
 from sidebar import tag_manager, system_tools
 from tabs import dashboard, directory, analytics
 
-# 1. Database Connection & Schema Setup
-conn = sqlite3.connect("people.db", check_same_thread=False)
-
-# Load schema from file
-try:
-    with open('schema.sql', 'r') as f:
-        schema = f.read()
-        conn.executescript(schema)
-    conn.commit()
-except Exception as e:
-    st.error(f"Error loading schema.sql: {e}")
+st.set_page_config(page_title="Relationship Tracker", layout="wide")
 
 # Mapping of Levels to Descriptions
 INTENSITY_LEVELS = {
@@ -30,24 +18,21 @@ INTENSITY_LEVELS = {
 # This ensures that as time passes, the scores decay automatically 
 # without needing a manual "Recalculate" click.
 if 'scores_refreshed' not in st.session_state:
-    from scoring import recalculate_all
-    recalculate_all(conn)
+    recalculate_all(supabase) 
     st.session_state['scores_refreshed'] = True
-
-st.set_page_config(page_title="People Tracker Pro", layout="wide")
 
 # --- SIDEBAR ---
 with st.sidebar:
-    selected_filter_tag, all_tags_df = tag_manager.render(conn)
-    system_tools.render(conn)
+    selected_filter_tag, all_tags_df = tag_manager.render(supabase)
+    system_tools.render(supabase)
 
 # --- MAIN NAVIGATION ---
 main_tab1, main_tab2, main_tab3 = st.tabs(["📊 Dashboard", "📇 Directory", "📈 Analytics"])
 with main_tab1:
-    dashboard.render(conn, all_tags_df)
+    dashboard.render(supabase, all_tags_df)
 
 with main_tab2:
-    directory.render(conn, selected_filter_tag, all_tags_df, INTENSITY_LEVELS)
+    directory.render(supabase, selected_filter_tag, all_tags_df, INTENSITY_LEVELS)
 
 with main_tab3:
-    analytics.render(conn, selected_filter_tag)
+    analytics.render(supabase, selected_filter_tag)

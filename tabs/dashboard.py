@@ -2,14 +2,19 @@ import streamlit as st
 import pandas as pd
 from scoring import recalculate_all
 
-def render(conn, all_tags_df):
+def render(supabase, all_tags_df):
     st.header("📊 Relationship Dashboard")
-    st.write("Welcome back! Here is a summary of your connections.")
+    st.write("Welcome back! Your data is now synced to the cloud.")
     
     # 1. Quick Stat Cards
     c1, c2, c3 = st.columns(3)
-    total_people = pd.read_sql("SELECT COUNT(*) FROM people", conn).iloc[0,0]
-    total_enc = pd.read_sql("SELECT COUNT(*) FROM encounters", conn).iloc[0,0]
+    
+    # Supabase "count" is very efficient: we use head(0) to just get the metadata
+    total_people_res = supabase.table("people").select("*", count="exact").execute()
+    total_enc_res = supabase.table("encounters").select("*", count="exact").execute()
+    
+    total_people = total_people_res.count if total_people_res.count else 0
+    total_enc = total_enc_res.count if total_enc_res.count else 0
     
     c1.metric("Total Connections", total_people)
     c2.metric("Total Encounters", total_enc)
@@ -27,11 +32,13 @@ def render(conn, all_tags_df):
             
             if submitted:
                 if f_name.strip() and l_name.strip():
-                    conn.execute(
-                        "INSERT INTO people (first_name, last_name, score) VALUES (?, ?, 0)",
-                        (f_name.strip(), l_name.strip())
-                    )
-                    conn.commit()
+                    # Supabase Insert
+                    supabase.table("people").insert({
+                        "first_name": f_name.strip(),
+                        "last_name": l_name.strip(),
+                        "score": 0.0
+                    }).execute()
+                    
                     st.success(f"Created profile for {f_name}!")
                     st.rerun()
                 else:
@@ -39,19 +46,36 @@ def render(conn, all_tags_df):
 
     # 3. Recent Activity Table
     st.subheader("🕒 Recent Activity")
-    recent_query = """
-    SELECT p.first_name || ' ' || p.last_name as Name, e.date, 
-           CASE e.intensity 
-               WHEN 4 THEN '🟢 Full Day'
-               WHEN 3 THEN '🔵 In Person'
-               WHEN 2 THEN '🟡 Phone/Video'
-               WHEN 1 THEN '⚪ Text/Chat'
-           END as Type
-    FROM encounters e JOIN people p ON e.person_id = p.id 
-    ORDER BY e.date DESC LIMIT 5
-    """
-    recent_df = pd.read_sql(recent_query, conn)
-    if not recent_df.empty:
+    
+    # We fetch the joined data. Supabase lets us pull 'people' data directly 
+    # through the foreign key defined in our SQL schema.
+    recent_res = supabase.table("encounters") \
+        .select("date, intensity, people(first_name, last_name)") \
+        .order("date", desc=True) \
+        .limit(5) \
+        .execute()
+    
+    if recent_res.data:
+        # Format the data for a clean table
+        formatted_data = []
+        for row in recent_res.data:
+            name = f"{row['people']['first_name']} {row['people']['last_name']}"
+            
+            # Map intensity to labels
+            intensity_map = {
+                4: '🟢 Full Day',
+                3: '🔵 In Person',
+                2: '🟡 Phone/Video',
+                1: '⚪ Text/Chat'
+            }
+            
+            formatted_data.append({
+                "Name": name,
+                "Date": row['date'],
+                "Type": intensity_map.get(row['intensity'], "Unknown")
+            })
+            
+        recent_df = pd.DataFrame(formatted_data)
         st.table(recent_df)
     else:
         st.info("No activity logged yet.")
