@@ -54,24 +54,26 @@ def calculate_decayed_score(encounters_df, target_date=None):
         iter_date += timedelta(days=1)
 
     return round(current_score, 2)
-
 def update_person_score(supabase, person_id):
-    """Fetches encounters from Supabase and updates the person's score."""
-    response = supabase.table("encounters") \
-        .select("date, intensity") \
-        .eq("person_id", person_id) \
-        .execute()
-    
-    enc_df = pd.DataFrame(response.data)
-    new_score = calculate_decayed_score(enc_df)
-    
-    # Update the score column in the people table
-    supabase.table("people") \
-        .update({"score": new_score}) \
-        .eq("id", person_id) \
-        .execute()
-    
-    return new_score
+    try:
+        response = supabase.table("encounters") \
+            .select("date, intensity") \
+            .eq("person_id", person_id) \
+            .execute()
+        
+        # If no encounters, score is 0. Avoid the heavy calculation.
+        if not response.data:
+            supabase.table("people").update({"score": 0.0}).eq("id", person_id).execute()
+            return 0.0
+
+        enc_df = pd.DataFrame(response.data)
+        new_score = calculate_decayed_score(enc_df)
+        
+        supabase.table("people").update({"score": new_score}).eq("id", person_id).execute()
+        return new_score
+    except Exception as e:
+        print(f"Error updating score for {person_id}: {e}")
+        return 0.0
 
 def recalculate_all(supabase):
     """Loops through all people in Supabase and refreshes their scores."""

@@ -6,6 +6,10 @@ def render(supabase):
     
     # Fetch all tags from Supabase
     response = supabase.table("tags").select("*").execute()
+    if not response.data:
+        all_tags_df = pd.DataFrame(columns=["id", "tag_name"])
+    else:
+        all_tags_df = pd.DataFrame(response.data)
     all_tags_df = pd.DataFrame(response.data)
 
     # A. Filter by Tag

@@ -18,8 +18,13 @@ INTENSITY_LEVELS = {
 # This ensures that as time passes, the scores decay automatically 
 # without needing a manual "Recalculate" click.
 if 'scores_refreshed' not in st.session_state:
-    recalculate_all(supabase) 
-    st.session_state['scores_refreshed'] = True
+    try:
+        # Instead of recalculating everyone every single refresh (which is slow),
+        # we only do it once per session.
+        recalculate_all(supabase) 
+        st.session_state['scores_refreshed'] = True
+    except Exception as e:
+        st.sidebar.warning("Note: Quick score sync pending.")
 
 # --- SIDEBAR ---
 with st.sidebar:
