@@ -26,6 +26,14 @@ INTENSITY_LEVELS = {
     1: "Text/Messaging only"
 }
 
+# --- AUTO-UPDATE SCORES ON STARTUP ---
+# This ensures that as time passes, the scores decay automatically 
+# without needing a manual "Recalculate" click.
+if 'scores_refreshed' not in st.session_state:
+    from scoring import recalculate_all
+    recalculate_all(conn)
+    st.session_state['scores_refreshed'] = True
+
 st.set_page_config(page_title="People Tracker Pro", layout="wide")
 
 # --- SIDEBAR ---
