@@ -1,6 +1,5 @@
 import streamlit as st
 from database import supabase
-from scoring import recalculate_all
 from sidebar import tag_manager, system_tools
 from tabs import dashboard, directory, analytics
 
@@ -19,9 +18,6 @@ INTENSITY_LEVELS = {
 # without needing a manual "Recalculate" click.
 if 'scores_refreshed' not in st.session_state:
     try:
-        # Instead of recalculating everyone every single refresh (which is slow),
-        # we only do it once per session.
-        recalculate_all(supabase) 
         st.session_state['scores_refreshed'] = True
     except Exception as e:
         st.sidebar.warning("Note: Quick score sync pending.")
