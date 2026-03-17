@@ -2,64 +2,63 @@ import streamlit as st
 import pandas as pd
 from scoring import recalculate_all
 
-def render(conn):
+def render(supabase):
     st.divider()
     st.subheader("⚙️ System Tools")
     
     col1, col2 = st.columns(2)
     
-    if col1.button("🔄 Recalculate"):
-        recalculate_all(conn)
-        st.success("Scores updated!")
-        st.rerun()
+    # --- 1. RECALCULATE ---
+    if col1.button("🔄 Recalculate", use_container_width=True):
+        with st.spinner("Syncing scores..."):
+            recalculate_all(supabase)
+            st.success("Scores updated!")
+            st.rerun()
 
-    if col2.button("🧹 Clean Dataset"):
-        duplicates_query = """
-        SELECT TRIM(LOWER(first_name)) as clean_first, 
-               TRIM(LOWER(last_name)) as clean_last, 
-               COUNT(*) as count 
-        FROM people 
-        GROUP BY clean_first, clean_last 
-        HAVING count > 1
-        """
-        dupes = pd.read_sql(duplicates_query, conn)
+    # --- 2. CLEAN DATASET (Merge Duplicates) ---
+    if col2.button("🧹 Clean Data", use_container_width=True):
+        # We fetch the list of people to find duplicates in Python
+        # (Postgres TRIM/LOWER is possible, but this is safer for a small-ish DB)
+        response = supabase.table("people").select("id, first_name, last_name").execute()
+        all_people = pd.DataFrame(response.data)
+
+        if all_people.empty:
+            st.info("Database is empty.")
+            return
+
+        # Identify duplicates by cleaning strings in Pandas
+        all_people['clean_f'] = all_people['first_name'].str.strip().str.lower()
+        all_people['clean_l'] = all_people['last_name'].str.strip().str.lower()
         
+        # Group to find sets with more than 1 ID
+        grouped = all_people.groupby(['clean_f', 'clean_l'])['id'].apply(list).reset_index()
+        dupes = grouped[grouped['id'].map(len) > 1]
+
         if dupes.empty:
             st.info("No duplicates found.")
         else:
             for _, row in dupes.iterrows():
-                ids_df = pd.read_sql(
-                    """SELECT id FROM people 
-                       WHERE TRIM(LOWER(first_name)) = ? 
-                       AND TRIM(LOWER(last_name)) = ? 
-                       ORDER BY id ASC""", 
-                    conn, params=(row['clean_first'], row['clean_last'])
-                )
-                
-                ids = ids_df['id'].tolist()
+                ids = sorted(row['id']) # Keep the oldest ID (smallest number)
                 primary_id = ids[0]
                 duplicate_ids = ids[1:]
                 
                 for dup_id in duplicate_ids:
-                    conn.execute("UPDATE encounters SET person_id = ? WHERE person_id = ?", (int(primary_id), int(dup_id)))
-                    conn.execute("UPDATE OR IGNORE person_tags SET person_id = ? WHERE person_id = ?", (int(primary_id), int(dup_id)))
-                    conn.execute("DELETE FROM people WHERE id = ?", (int(dup_id),))
-                    conn.execute("DELETE FROM person_tags WHERE person_id = ?", (int(dup_id),))
+                    # 1. Move encounters to the primary person
+                    supabase.table("encounters").update({"person_id": primary_id}).eq("person_id", dup_id).execute()
+                    
+                    # 2. Move tags (We use a try/except because person_tags might already exist for primary)
+                    tag_res = supabase.table("person_tags").select("tag_id").eq("person_id", dup_id).execute()
+                    for tag_row in tag_res.data:
+                        try:
+                            supabase.table("person_tags").insert({"person_id": primary_id, "tag_id": tag_row['tag_id']}).execute()
+                        except:
+                            pass # Tag already exists on primary, ignore it
+                    
+                    # 3. Delete the duplicate person (Cascading will handle their old person_tags)
+                    supabase.table("people").delete().eq("id", dup_id).execute()
 
-                conn.execute(f"""
-                    DELETE FROM encounters 
-                    WHERE person_id = {primary_id} 
-                    AND id NOT IN (
-                        SELECT id FROM (
-                            SELECT id, MAX(intensity) 
-                            FROM encounters 
-                            WHERE person_id = {primary_id} 
-                            GROUP BY date
-                        )
-                    )
-                """)
-            
-            conn.commit()
-            recalculate_all(conn)
-            st.success(f"Merged {len(dupes)} sets of duplicates!")
+            # Final Step: Clean up redundant encounters (same person, same day)
+            # We refresh the whole score set after the merge
+            recalculate_all(supabase)
+            st.success(f"Merged {len(dupes)} duplicate sets!")
             st.rerun()
