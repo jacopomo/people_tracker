@@ -3,6 +3,29 @@ from database import supabase
 from sidebar import tag_manager, system_tools
 from tabs import dashboard, directory, analytics
 
+def check_password():
+    """Returns True if the user had the correct password."""
+    def password_entered():
+        if st.session_state["password"] == st.secrets["APP_PASSWORD"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.title("🔒 Private Vault")
+        st.text_input("Enter Passcode", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input("Enter Passcode", type="password", on_change=password_entered, key="password")
+        st.error("😕 Access Denied")
+        return False
+    else:
+        return True
+
+if not check_password():
+    st.stop() # Stops the rest of the app from loading
+
 st.set_page_config(page_title="Relationship Tracker", layout="wide")
 
 # Mapping of Levels to Descriptions
